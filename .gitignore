@@ -1,0 +1,31 @@
+# Streamlit
+.streamlit/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and credentials
+.env
+.env.local
+secrets.toml
+
+# API Keys and tokens
+*.pem
+*.key
+*.token
