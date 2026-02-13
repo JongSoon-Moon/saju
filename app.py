@@ -1,447 +1,627 @@
+"""
+🔮 사주명리 분석 앱 v2.0
+========================
+전통 동양 명리학(사주팔자) 이론 기반 종합 분석 Streamlit 앱.
+"""
+
 import streamlit as st
-from datetime import datetime, timedelta
 import pandas as pd
 
-# 페이지 설정
-st.set_page_config(
-    page_title="사주분석 앱",
-    page_icon="🔮",
-    layout="centered",
-    initial_sidebar_state="expanded"
+from sajuengine.models import BirthInput
+from sajuengine.engine import (
+    validate_input,
+    generate_full_analysis,
+    generate_time_scenarios,
+)
+from sajuengine.interpretation import (
+    generate_element_interpretation,
+    generate_yinyang_interpretation,
+    generate_strength_interpretation,
+    generate_interaction_interpretation,
+    generate_luck_interpretation,
+    calculate_element_balance_score,
+    calculate_interaction_score,
+)
+from sajuengine.data import (
+    STEM_INFO, BRANCH_INFO, ELEMENT_COLORS, ELEMENT_KOREAN,
+    ELEMENT_DETAILS, TEN_GOD_DESC, TWELVE_STAGE_DESC, DISCLAIMER,
 )
 
-# 스타일 설정
+# ========== 페이지 설정 ==========
+st.set_page_config(
+    page_title="사주명리 분석 v2.0",
+    page_icon="🔮",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ========== CSS 스타일 ==========
 st.markdown("""
-    <style>
-        .main-title {
-            text-align: center;
-            color: #8B4513;
-            font-size: 2.5em;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        .subtitle {
-            text-align: center;
-            color: #666;
-            font-size: 1.1em;
-            margin-bottom: 30px;
-        }
-        .result-box {
-            background: linear-gradient(135deg, #FFF8DC 0%, #FFE4B5 100%);
-            border: 2px solid #8B4513;
-            border-radius: 10px;
-            padding: 20px;
-            margin: 10px 0;
-        }
-        .element-box {
-            background: #F0F8FF;
-            border-left: 4px solid #4169E1;
-            padding: 12px;
-            border-radius: 5px;
-            margin: 8px 0;
-        }
-    </style>
+<style>
+    .main-title { text-align: center; color: #5D3A1A; font-size: 2.8em; font-weight: bold; margin-bottom: 5px; }
+    .subtitle { text-align: center; color: #8B7355; font-size: 1.1em; margin-bottom: 20px; }
+    .saju-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+    .saju-table th, .saju-table td {
+        text-align: center; padding: 10px 8px; border: 1px solid #D2B48C; font-size: 1.3em;
+    }
+    .saju-table th { background: #8B4513; color: white; font-size: 0.9em; }
+    .saju-table .stem { background: #FFF8DC; color: #8B0000; font-weight: bold; font-size: 1.5em; }
+    .saju-table .branch { background: #FFFACD; color: #191970; font-weight: bold; font-size: 1.5em; }
+    .saju-table .hidden { background: #FFF5EE; color: #556B2F; font-size: 0.85em; }
+    .saju-table .tengod { background: #F0F8FF; color: #4169E1; font-size: 0.8em; }
+    .saju-table .stage { background: #FFF0F5; color: #8B008B; font-size: 0.8em; }
+    .score-card { background: linear-gradient(135deg, #FFF8DC, #FFE4B5);
+        border: 2px solid #D2B48C; border-radius: 12px; padding: 15px; text-align: center; margin: 5px; }
+    .score-card h3 { color: #8B4513; margin: 5px 0; font-size: 1.1em; }
+    .score-card p { color: #5D3A1A; margin: 3px 0; font-size: 1.4em; font-weight: bold; }
+    .interaction-pos { color: #4169E1; font-weight: bold; }
+    .interaction-neg { color: #DC143C; font-weight: bold; }
+    .disclaimer-box { background: #FFF3CD; border: 1px solid #FFC107; border-radius: 8px;
+        padding: 15px; margin-top: 20px; font-size: 0.85em; }
+</style>
 """, unsafe_allow_html=True)
 
-# ========== 사주 데이터 정의 ==========
-HEAVENLY_STEMS = {
-    0: '甲', 1: '乙', 2: '丙', 3: '丁', 4: '戊',
-    5: '己', 6: '庚', 7: '辛', 8: '壬', 9: '癸'
-}
 
-EARTHLY_BRANCHES = {
-    0: '子', 1: '丑', 2: '寅', 3: '卯', 4: '辰',
-    5: '巳', 6: '午', 7: '未', 8: '申', 9: '酉',
-    10: '戌', 11: '亥'
-}
+# ========== 세션 상태 초기화 ==========
+if 'report' not in st.session_state:
+    st.session_state.report = None
+if 'analyzed' not in st.session_state:
+    st.session_state.analyzed = False
 
-STEM_MEANING = {
-    '甲': '갑(나무의 시작)', '乙': '을(유연한 나무)',
-    '丙': '병(불의 양)', '丁': '정(불의 음)',
-    '戊': '무(흙의 양)', '己': '기(흙의 음)',
-    '庚': '경(쇠의 양)', '辛': '신(쇠의 음)',
-    '壬': '임(물의 양)', '癸': '계(물의 음)'
-}
 
-BRANCH_MEANING = {
-    '子': '쥐띠', '丑': '소띠', '寅': '호랑이띠', '卯': '토끼띠',
-    '辰': '용띠', '巳': '뱀띠', '午': '말띠', '未': '양띠',
-    '申': '원숭이띠', '酉': '닭띠', '戌': '개띠', '亥': '돼지띠'
-}
+# ========== 사이드바: 입력 화면 ==========
+def render_sidebar():
+    with st.sidebar:
+        st.markdown("## 🔮 사주 분석 입력")
+        st.caption("생년월일시를 입력하고 분석 버튼을 누르세요.")
 
-FIVE_ELEMENTS = {
-    '甲': '木', '乙': '木', '丙': '火', '丁': '火', '戊': '土',
-    '己': '土', '庚': '金', '辛': '金', '壬': '水', '癸': '水'
-}
+        st.markdown("### 📅 기본 정보")
+        col1, col2 = st.columns(2)
+        with col1:
+            year = st.number_input("년", 1900, 2100, 1990, step=1, key="year")
+        with col2:
+            cal_type = st.radio("달력", ["양력", "음력"], horizontal=True, key="cal")
 
-ELEMENT_COLORS = {
-    '木': ('초록색', '동쪽', '봄', '신맛'),
-    '火': ('빨간색', '남쪽', '여름', '쓴맛'),
-    '土': ('노란색', '중앙', '환절기', '단맛'),
-    '金': ('하얀색', '서쪽', '가을', '매운맛'),
-    '水': ('검은색', '북쪽', '겨울', '짠맛')
-}
+        col1, col2 = st.columns(2)
+        with col1:
+            month = st.number_input("월", 1, 12, 1, step=1, key="month")
+        with col2:
+            day = st.number_input("일", 1, 31, 1, step=1, key="day")
 
-# ========== 사주 계산 함수 ==========
+        is_leap = False
+        if cal_type == "음력":
+            is_leap = st.checkbox("윤달", key="leap")
 
-def get_lunar_date(year, month, day, is_lunar=False):
-    """
-    양력/음력 날짜 처리
-    is_lunar=True면 음력으로 입력된 것으로 가정
-    """
-    try:
-        # 간단한 버전: 양력 기준으로 처리
-        # 실제 음력 변환을 위해서는 lunardate 패키지 필요
-        date = datetime(year, month, day)
-        return date
-    except ValueError as e:
-        return None
+        st.markdown("### ⏰ 출생 시간")
+        time_known = st.radio("시간을 아십니까?", ["예", "모름"], horizontal=True, key="time_known")
+        hour = None
+        if time_known == "예":
+            hour = st.slider("시각 (0~23시)", 0, 23, 12, key="hour")
 
-def calculate_heavenly_stem_and_branch(birth_date):
-    """
-    생년월일로부터 년월일시의 천간지지 계산
-    """
-    year = birth_date.year
-    month = birth_date.month
-    day = birth_date.day
-    
-    # 년간지 계산 (1900년 기준점)
-    year_index = (year - 1900) % 60
-    year_stem = HEAVENLY_STEMS[year_index % 10]
-    year_branch = EARTHLY_BRANCHES[year_index % 12]
-    
-    # 월간지 계산 (간단해진 버전)
-    month_stem_index = (year_index % 10 * 2 + month - 1) % 10
-    month_branch = EARTHLY_BRANCHES[(month - 1) % 12]
-    month_stem = HEAVENLY_STEMS[month_stem_index]
-    
-    # 일간지 계산
-    base_date = datetime(1900, 1, 1)  # 1900년 1월 1일은 鼠年 甲子
-    target_date = datetime(year, month, day)
-    days_diff = (target_date - base_date).days
-    
-    day_index = days_diff % 60
-    day_stem = HEAVENLY_STEMS[day_index % 10]
-    day_branch = EARTHLY_BRANCHES[day_index % 12]
-    
-    # 시간간지 (사용자 입력으로 받을 수 있음)
-    hour_index = 0  # 기본값
-    hour_stem = HEAVENLY_STEMS[(day_index % 10 * 2 + hour_index) % 10]
-    hour_branch = EARTHLY_BRANCHES[hour_index % 12]
-    
-    return {
-        'year': (year_stem, year_branch),
-        'month': (month_stem, month_branch),
-        'day': (day_stem, day_branch),
-        'hour': (hour_stem, hour_branch)
-    }
+        st.markdown("### 👤 추가 정보")
+        gender_opt = st.radio("성별", ["남", "여", "선택 안함"], horizontal=True, key="gender")
+        gender_map = {"남": "male", "여": "female", "선택 안함": None}
+        gender = gender_map[gender_opt]
 
-def analyze_five_elements(year, month, day, hour):
-    """
-    오행 분석
-    """
-    stems = [year[0], month[0], day[0], hour[0]]
-    elements = {
-        '木': 0, '火': 0, '土': 0, '金': 0, '水': 0
-    }
-    
-    for stem in stems:
-        element = FIVE_ELEMENTS.get(stem, '金')
-        elements[element] += 1
-    
-    return elements
+        name = st.text_input("이름 (선택)", key="name", placeholder="홍길동")
 
-def get_zodiac_animal(year_branch):
-    """
-    십간십이지 동물띠 반환
-    """
-    return BRANCH_MEANING.get(year_branch, '알 수 없음')
+        st.divider()
+        if st.button("🔍 사주 분석하기", type="primary", use_container_width=True):
+            inp = BirthInput(
+                year=year, month=month, day=day,
+                hour=hour,
+                calendar_type='solar' if cal_type == '양력' else 'lunar',
+                is_leap_month=is_leap,
+                gender=gender,
+                name=name if name else None,
+            )
 
-def calculate_luck_aspects(stem_branch_info):
-    """
-    운세 분석 (간단한 버전)
-    """
-    year_stem, year_branch = stem_branch_info['year']
-    
-    luck_message = f"""
-    {year_branch}띠({BRANCH_MEANING[year_branch]})로 태어난 분의 특성:
-    
-    🌟 **기본 성질**: {year_stem} 천간의 에너지를 가진 사람
-    📊 **오행**: {FIVE_ELEMENTS.get(year_stem, '不明')}
-    💫 **운세**: 자신의 오행 에너지를 이해하면 더 나은 운을 만들 수 있습니다.
-    
-    ✨ **조언**: 자신의 타고난 성질을 받아들이고, 부족한 부분을 채우려는 노력이 중요합니다.
-    """
-    
-    return luck_message
-
-# ========== UI 구성 ==========
-
-# 제목
-st.markdown('<p class="main-title">🔮 사주분석 앱</p>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">당신의 운명을 읽어보세요</p>', unsafe_allow_html=True)
-
-# 탭 구성
-tab1, tab2, tab3, tab4 = st.tabs(['📅 사주 분석', 'ℹ️ 사주란?', '📚 용어 설명', '⚙️ 설정'])
-
-# ========== TAB 1: 사주 분석 ==========
-with tab1:
-    st.header("📅 생년월일 입력")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        year = st.number_input("태어난 년도", min_value=1900, max_value=2100, value=2000, step=1)
-    
-    with col2:
-        month = st.number_input("태어난 월", min_value=1, max_value=12, value=1, step=1)
-    
-    with col3:
-        day = st.number_input("태어난 일", min_value=1, max_value=31, value=1, step=1)
-    
-    # 음력/양력 선택
-    calendar_type = st.radio("달력 유형", ["양력", "음력"], horizontal=True)
-    
-    # 시간 입력 (선택사항)
-    st.caption("⏰ 정확한 분석을 위해 정시(시간)를 입력할 수 있습니다 (선택사항)")
-    time_input = st.slider("태어난 시각 (선택사항)", 0, 23, 12)
-    
-    # 분석 버튼
-    if st.button("🔍 사주 분석하기", type="primary", use_container_width=True):
-        try:
-            # 날짜 유효성 검사
-            birth_date = get_lunar_date(year, month, day, is_lunar=(calendar_type == "음력"))
-            
-            if birth_date is None:
-                st.error("❌ 잘못된 날짜입니다. 다시 확인해주세요.")
+            errors = validate_input(inp)
+            if errors:
+                for e in errors:
+                    st.error(f"❌ {e}")
             else:
-                # 사주 계산
-                stem_branch = calculate_heavenly_stem_and_branch(birth_date)
-                
-                # 결과 표시
-                st.markdown('<div class="result-box">', unsafe_allow_html=True)
-                st.subheader(f"📊 {year}년 {month}월 {day}일 {calendar_type} 출생자의 사주")
-                
-                # 천간지지 표시
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("年(년)", f"{stem_branch['year'][0]}{stem_branch['year'][1]}")
-                
-                with col2:
-                    st.metric("月(월)", f"{stem_branch['month'][0]}{stem_branch['month'][1]}")
-                
-                with col3:
-                    st.metric("日(일)", f"{stem_branch['day'][0]}{stem_branch['day'][1]}")
-                
-                with col4:
-                    st.metric("時(시)", f"{stem_branch['hour'][0]}{stem_branch['hour'][1]}")
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # 동물띠
-                zodiac = get_zodiac_animal(stem_branch['year'][1])
-                st.success(f"🐶 **동물띠**: {zodiac}")
-                
-                # 오행 분석
-                st.subheader("🌊 오행(五行) 분석")
-                elements = analyze_five_elements(
-                    stem_branch['year'],
-                    stem_branch['month'],
-                    stem_branch['day'],
-                    stem_branch['hour']
-                )
-                
-                # 오행 비율
-                col1, col2 = st.columns([2, 1])
-                
-                with col1:
-                    element_df = pd.DataFrame({
-                        '오행': list(elements.keys()),
-                        '강도': list(elements.values())
-                    })
-                    
-                    st.bar_chart(element_df.set_index('오행'))
-                
-                with col2:
-                    st.write("**오행 분포**")
-                    for element, count in elements.items():
-                        color, direction, season, taste = ELEMENT_COLORS[element]
-                        st.write(f"{element}: {count}개")
-                
-                # 각 오행별 상세 설명
-                st.subheader("💫 오행의 의미")
-                
-                for element in ['木', '火', '土', '金', '水']:
-                    color, direction, season, taste = ELEMENT_COLORS[element]
-                    st.markdown(f"""
-                    <div class="element-box">
-                    <strong>{element} (오행)</strong><br>
-                    색: {color} | 방향: {direction} | 계절: {season} | 맛: {taste}
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                # 천간과 지지의 의미
-                st.subheader("🔤 천간과 지지의 의미")
-                
-                year_stem, year_branch = stem_branch['year']
-                st.markdown(f"""
-                <div class="result-box">
-                <h4>년주: {year_stem} {year_branch}</h4>
-                <p><strong>{year_stem}</strong> - {STEM_MEANING.get(year_stem, '미상')}</p>
-                <p><strong>{year_branch}</strong> - {BRANCH_MEANING.get(year_branch, '미상')}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # 운세 해석
-                st.subheader("✨ 운세 해석")
-                st.info(calculate_luck_aspects(stem_branch))
-                
-                # 상세 정보 표시
-                st.subheader("📋 전체 사주도")
-                saju_df = pd.DataFrame({
-                    '구분': ['年(년)', '月(월)', '日(일)', '時(시)'],
-                    '천간': [stem_branch['year'][0], stem_branch['month'][0], 
-                            stem_branch['day'][0], stem_branch['hour'][0]],
-                    '지지': [stem_branch['year'][1], stem_branch['month'][1], 
-                            stem_branch['day'][1], stem_branch['hour'][1]]
-                })
-                
-                st.dataframe(saju_df, use_container_width=True)
-        
-        except ValueError as e:
-            st.error(f"❌ 오류 발생: {str(e)}")
+                with st.spinner("사주를 분석 중입니다..."):
+                    report = generate_full_analysis(inp)
+                    st.session_state.report = report
+                    st.session_state.analyzed = True
+                st.success("✅ 분석 완료!")
 
-# ========== TAB 2: 사주란? ==========
-with tab2:
-    st.header("ℹ️ 사주(四柱)란?")
-    
-    st.markdown("""
-    ### 📖 사주의 정의
-    
-    **사주(四柱)**는 동양 전통 운명학으로, 인간의 운명을 분석하는 학문입니다.
-    
-    "四柱"는 네 개의 기둥을 의미하며:
-    - **年柱 (년주)**: 태어난 해
-    - **月柱 (월주)**: 태어난 달
-    - **日柱 (일주)**: 태어난 날
-    - **時柱 (시주)**: 태어난 시간
-    
-    이 네 개의 기둥이 이루는 천간지지의 조합으로 개인의 운명과 성격을 분석합니다.
-    
-    ### 🌟 주요 개념
-    
-    | 개념 | 설명 |
-    |------|------|
-    | **天干 (천간)** | 10개의 부호: 甲乙丙丁戊己庚辛壬癸 |
-    | **地支 (지지)** | 12개의 부호: 子丑寅卯辰巳午未申酉戌亥 |
-    | **五行 (오행)** | 목화토금수로 분류되는 5가지 에너지 |
-    | **納音 (납음)** | 천간지지 조합의 특별한 오행 |
-    
-    ### 💡 사주 분석의 의미
-    
-    사주는 단순한 점술이 아니라:
-    1. **개인의 성향 파악** - 타고난 기질과 성격
-    2. **운의 흐름 이해** - 인생의 주기적 변화
-    3. **자기계발의 방향** - 부족한 부분 개선
-    4. **인간관계 분석** - 만남과 관계 이해
-    
-    ### ⚠️ 사주의 올바른 이해
-    
-    - 사주는 **참고 자료**이지 절대적인 것이 아닙니다
-    - **본인의 노력과 선택**이 운명을 바꿀 수 있습니다
-    - 부정적 해석에 너무 의존하지 않기
-    - 전문가의 상담과 함께 활용하기
-    """)
+        st.divider()
+        st.caption("⚠️ 본 분석은 전통 명리학 이론 기반 참고 자료이며 과학적 예측이 아닙니다.")
 
-# ========== TAB 3: 용어 설명 ==========
-with tab3:
-    st.header("📚 사주 용어 설명")
-    
-    st.subheader("천간(天干)")
-    st.markdown("""
-    | 天干 | 음독 | 양/음 | 오행 | 의미 |
-    |------|------|--------|------|------|
-    | 甲 | 갑 | 양 | 木 | 시작, 큰 나무 |
-    | 乙 | 을 | 음 | 木 | 유연함, 작은 나무 |
-    | 丙 | 병 | 양 | 火 | 밝음, 불 |
-    | 丁 | 정 | 음 | 火 | 온열함, 촛불 |
-    | 戊 | 무 | 양 | 土 | 높음, 큰 흙 |
-    | 己 | 기 | 음 | 土 | 낮음, 작은 흙 |
-    | 庚 | 경 | 양 | 金 | 단단함, 큰 쇠 |
-    | 辛 | 신 | 음 | 金 | 예리함, 작은 쇠 |
-    | 壬 | 임 | 양 | 水 | 포함, 큰 물 |
-    | 癸 | 계 | 음 | 水 | 유순함, 작은 물 |
-    """)
-    
-    st.subheader("지지(地支) & 동물띠")
-    st.markdown("""
-    | 地支 | 띠 | 시간 | 오행 | 특징 |
-    |------|-----|------|------|------|
-    | 子 | 쥐 | 자정(23-1시) | 水 | 지혜로움 |
-    | 丑 | 소 | 새벽(1-3시) | 土 | 근면함 |
-    | 寅 | 호랑이 | 이른아침(3-5시) | 木 | 용맹함 |
-    | 卯 | 토끼 | 아침(5-7시) | 木 | 온화함 |
-    | 辰 | 용 | 아침(7-9시) | 土 | 위엄있음 |
-    | 巳 | 뱀 | 낮전(9-11시) | 火 | 신비로움 |
-    | 午 | 말 | 정오(11-13시) | 火 | 활발함 |
-    | 未 | 양 | 오후(13-15시) | 土 | 온순함 |
-    | 申 | 원숭이 | 오후(15-17시) | 金 | 영리함 |
-    | 酉 | 닭 | 저녁(17-19시) | 金 | 충실함 |
-    | 戌 | 개 | 저녁(19-21시) | 土 | 충성스러움 |
-    | 亥 | 돼지 | 밤(21-23시) | 水 | 솔직함 |
-    """)
-    
-    st.subheader("오행(五行)")
-    st.markdown("""
-    | 오행 | 색 | 방위 | 계절 | 맛 | 특징 |
-    |------|------|------|------|------|------|
-    | 木 | 초록 | 동쪽 | 봄 | 신맛 | 성장, 발전 |
-    | 火 | 빨강 | 남쪽 | 여름 | 쓴맛 | 드러남, 열정 |
-    | 土 | 노랑 | 중앙 | 환절기 | 단맛 | 안정, 신뢰 |
-    | 金 | 하양 | 서쪽 | 가을 | 매운맛 | 결단, 수렴 |
-    | 水 | 검정 | 북쪽 | 겨울 | 짠맛 | 흐름, 지혜 |
-    """)
 
-# ========== TAB 4: 설정 ==========
-with tab4:
-    st.header("⚙️ 앱 설정")
-    
-    st.markdown("""
-    ### 📌 현재 버전
-    **v1.0.0** - 기본 사주분석 기능
-    
-    ### 🎯 주요 기능
-    - ✅ 생년월일 입력
-    - ✅ 천간지지 계산
-    - ✅ 오행 분석
-    - ✅ 용어 설명
-    - ✅ 기본 운세 해석
-    
-    ### 📝 주의사항
-    
-    1. **정확한 시간이 중요합니다**
-       - 가능하면 정확한 출생 시간을 입력해주세요
-       - 시간이 없으면 정오(12시)를 기준으로 합니다
-    
-    2. **음력/양력 확인**
-       - 증명서의 달력 표시를 확인해주세요
-       - 음력으로 변환하면 결과가 달라집니다
-    
-    3. **전문가 상담**
-       - 더 정확한 분석을 원하면 전문가 상담을 권장합니다
-    
-    ### 💬 피드백
-    
-    이 앱에 대한 의견이나 개선 사항이 있으시면:
-    - GitHub Issues를 통해 제안해주세요
-    - ⭐ 도움이 되셨다면 스타를 눌러주세요!
-    """)
-    
-    # 앱 정보
+# ========== 사주 원국표 ==========
+def render_saju_table(report):
+    p = report.pillars
+    pillars_data = [
+        ('時柱', p.hour),
+        ('日柱', p.day),
+        ('月柱', p.month),
+        ('年柱', p.year),
+    ]
+
+    html = '<table class="saju-table">'
+    html += '<tr>'
+    for label, _ in pillars_data:
+        html += f'<th>{label}</th>'
+    html += '</tr>'
+
+    # 천간
+    html += '<tr>'
+    for _, pillar in pillars_data:
+        if pillar:
+            si = STEM_INFO[pillar.stem]
+            html += f'<td class="stem" title="{si["korean"]}({si["element"]},{si["yinyang"]})">{pillar.stem}</td>'
+        else:
+            html += '<td class="stem" style="color:#999">?</td>'
+    html += '</tr>'
+
+    # 지지
+    html += '<tr>'
+    for _, pillar in pillars_data:
+        if pillar:
+            bi = BRANCH_INFO[pillar.branch]
+            html += f'<td class="branch" title="{bi["korean"]}({bi["animal"]},{bi["element"]})">{pillar.branch}</td>'
+        else:
+            html += '<td class="branch" style="color:#999">?</td>'
+    html += '</tr>'
+
+    # 지장간
+    html += '<tr>'
+    for _, pillar in pillars_data:
+        if pillar:
+            hs_text = ' '.join(hs.stem for hs in pillar.hidden_stems)
+            html += f'<td class="hidden">{hs_text}</td>'
+        else:
+            html += '<td class="hidden">-</td>'
+    html += '</tr>'
+
+    # 십신
+    html += '<tr>'
+    for _, pillar in pillars_data:
+        if pillar:
+            html += f'<td class="tengod">{pillar.ten_god}</td>'
+        else:
+            html += '<td class="tengod">-</td>'
+    html += '</tr>'
+
+    # 12운성
+    html += '<tr>'
+    for _, pillar in pillars_data:
+        if pillar:
+            html += f'<td class="stage">{pillar.twelve_stage}</td>'
+        else:
+            html += '<td class="stage">-</td>'
+    html += '</tr>'
+
+    html += '</table>'
+    html += '<div style="font-size:0.75em; color:#888; margin-top:5px; text-align:center;">'
+    html += '행 순서: 천간 | 지지 | 지장간 | 십신 | 12운성</div>'
+
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ========== 오행 차트 ==========
+def render_element_chart(report):
+    el = report.element_stats_with_hidden
+    pcts = el.percentages
+    values = el.as_dict
+
+    chart_data = pd.DataFrame({
+        '오행': list(values.keys()),
+        '수치': [round(v, 1) for v in values.values()],
+    }).set_index('오행')
+
+    col1, col2 = st.columns([3, 2])
+
+    with col1:
+        st.bar_chart(chart_data, color='#D2B48C')
+
+    with col2:
+        for element in ['木', '火', '土', '金', '水']:
+            pct = pcts.get(element, 0)
+            v = values.get(element, 0)
+            color = ELEMENT_COLORS.get(element, '#888')
+            bar_width = max(5, int(pct * 2))
+            st.markdown(
+                f'<div style="margin:4px 0;">'
+                f'<span style="display:inline-block;width:60px;font-weight:bold;">{ELEMENT_KOREAN[element]}</span>'
+                f'<span style="display:inline-block;width:{bar_width}px;height:16px;'
+                f'background:{color};border-radius:3px;vertical-align:middle;"></span>'
+                f' <span style="font-size:0.9em;">{v:.1f} ({pct}%)</span></div>',
+                unsafe_allow_html=True,
+            )
+        if el.missing:
+            missing_names = ', '.join(ELEMENT_KOREAN[m] for m in el.missing)
+            st.warning(f"⚠️ 부족: {missing_names}")
+
+
+# ========== 핵심 카드 ==========
+def render_summary_cards(report):
+    p = report.pillars
+    strength = report.strength
+    el = report.element_stats_with_hidden
+
+    ds = p.day_stem
+    ds_info = STEM_INFO[ds]
+    animal = BRANCH_INFO[p.year.branch]['animal']
+
+    cols = st.columns(4)
+
+    with cols[0]:
+        st.markdown(
+            f'<div class="score-card"><h3>🏋️ 신강/신약</h3>'
+            f'<p>{strength.grade}</p>'
+            f'<span style="font-size:0.8em;">{strength.score:.0f}점</span></div>',
+            unsafe_allow_html=True)
+
+    with cols[1]:
+        st.markdown(
+            f'<div class="score-card"><h3>☯️ 일간</h3>'
+            f'<p>{ds} {ds_info["element"]}</p>'
+            f'<span style="font-size:0.8em;">{ds_info["korean"]} ({ds_info["yinyang"]})</span></div>',
+            unsafe_allow_html=True)
+
+    with cols[2]:
+        st.markdown(
+            f'<div class="score-card"><h3>🐉 띠</h3>'
+            f'<p>{animal}띠</p>'
+            f'<span style="font-size:0.8em;">{p.year.branch}({BRANCH_INFO[p.year.branch]["korean"]})</span></div>',
+            unsafe_allow_html=True)
+
+    with cols[3]:
+        st.markdown(
+            f'<div class="score-card"><h3>🌊 오행</h3>'
+            f'<p>{ELEMENT_KOREAN[el.dominant]} 강</p>'
+            f'<span style="font-size:0.8em;">{ELEMENT_KOREAN[el.weakest]} 약</span></div>',
+            unsafe_allow_html=True)
+
+
+# ========== 탭 1: 분석 요약 ==========
+def render_summary_tab(report):
+    inp = report.input
+    p = report.pillars
+
+    name_text = f" — {inp.name}님" if inp.name else ""
+    cal_text = "양력" if inp.calendar_type == 'solar' else "음력"
+    hour_text = f" {inp.hour}시" if inp.hour is not None else ""
+    gender_text = {"male": " 남성", "female": " 여성"}.get(inp.gender, "")
+
+    st.markdown(
+        f'### 📊 사주 분석 결과{name_text}\n'
+        f'{inp.year}년 {inp.month}월 {inp.day}일 ({cal_text}){hour_text}{gender_text}'
+    )
+
+    if inp.hour is None:
+        st.info("⏰ 출생 시간을 입력하지 않아 **시주(時柱) 없이 3주 기반**으로 분석합니다.")
+
+    st.markdown("#### 📋 사주 원국표")
+    render_saju_table(report)
+
     st.divider()
-    st.caption("🔮 사주분석 앱 | Python + Streamlit으로 만들어졌습니다")
+    render_summary_cards(report)
+    st.divider()
 
-# 푸터
-st.divider()
-st.caption("💡 Tip: 정확한 분석을 위해 정확한 출생 시간을 입력하세요")
+    # 오행 분포
+    st.markdown("#### 🌊 오행(五行) 분포")
+    render_element_chart(report)
+
+    el_interp = generate_element_interpretation(report.element_stats_with_hidden)
+    st.markdown(el_interp['interpretation'])
+    if el_interp['advice']:
+        with st.expander("💡 오행 조언"):
+            for a in el_interp['advice']:
+                st.write(f"• {a}")
+
+    st.divider()
+
+    # 음양 균형
+    st.markdown("#### ☯️ 음양 균형")
+    yy = report.yinyang_stats
+    yy_interp = generate_yinyang_interpretation(yy)
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.metric("陽 (양)", yy.yang)
+        st.metric("陰 (음)", yy.yin)
+    with col2:
+        st.write(yy_interp['interpretation'])
+        st.caption(f"💡 {yy_interp['advice']}")
+
+    st.divider()
+
+    # 성격 요약
+    if report.personality:
+        st.markdown("#### ✨ 성격 요약")
+        st.info(report.personality.summary)
+
+        for detail in report.personality.details:
+            with st.expander(f"📌 {detail['subtitle']}"):
+                st.write(detail['content'])
+                if detail.get('evidence'):
+                    st.caption("근거: " + " / ".join(detail['evidence'][:3]))
+
+
+# ========== 탭 2: 상세 분석 ==========
+def render_detail_tab(report):
+    p = report.pillars
+
+    sub_tabs = st.tabs(["🔟 십신 분석", "🔄 12운성", "⚡ 합·충 관계", "🏋️ 신강·신약"])
+
+    with sub_tabs[0]:
+        st.markdown("### 🔟 십신(十神) 분석")
+        st.caption("일간을 기준으로 나머지 글자와의 관계를 분석합니다.")
+
+        tg = report.ten_god_stats
+        group_counts = tg.get_group_counts()
+
+        for group, count in group_counts.items():
+            bar = '█' * int(count) + '░' * (6 - int(count))
+            highlight = ' ⭐ 최다' if group == tg.dominant_group else ''
+            st.write(f"**{group}** {bar} {count}개{highlight}")
+
+        st.write(f"\n💡 **{tg.dominant_group}**이(가) 가장 강하여, "
+                f"{_get_group_short_desc(tg.dominant_group)}의 특성이 두드러집니다.")
+
+        with st.expander("📍 십신 배치 상세"):
+            for pos in tg.positions:
+                pillar_kr = {'year': '년주', 'month': '월주', 'day': '일주', 'hour': '시주'}.get(pos.pillar, pos.pillar)
+                pos_kr = {'stem': '천간', 'branch': '지지(본기)', 'hidden': '지장간'}.get(pos.position, pos.position)
+                desc = TEN_GOD_DESC.get(pos.ten_god, '')
+                st.write(f"• **{pillar_kr} {pos_kr}** {pos.char} → **{pos.ten_god}**: {desc}")
+
+    with sub_tabs[1]:
+        st.markdown("### 🔄 12운성(十二運星)")
+        st.caption(f"일간 {p.day_stem}이(가) 각 지지에서의 생왕사절 단계입니다.")
+
+        stage_data = []
+        labels = {'year': '년지', 'month': '월지', 'day': '일지', 'hour': '시지'}
+        for name, pillar in [('year', p.year), ('month', p.month), ('day', p.day), ('hour', p.hour)]:
+            if pillar:
+                stage_data.append({
+                    '위치': labels[name], '지지': pillar.branch,
+                    '12운성': pillar.twelve_stage,
+                    '의미': TWELVE_STAGE_DESC.get(pillar.twelve_stage, ''),
+                })
+
+        if stage_data:
+            st.dataframe(pd.DataFrame(stage_data), use_container_width=True, hide_index=True)
+
+    with sub_tabs[2]:
+        st.markdown("### ⚡ 합·충 관계")
+        interactions = report.interactions
+
+        if not interactions:
+            st.info("원국에서 특별한 합·충 관계가 발견되지 않았습니다.")
+        else:
+            interp = generate_interaction_interpretation(interactions)
+            score_info = calculate_interaction_score(interactions)
+
+            st.metric("조화 점수", f"{score_info['harmony_score']}/100",
+                     delta=f"합 {score_info['positive_count']}개 / 충 {score_info['negative_count']}개")
+
+            for item in interp:
+                cls = "interaction-pos" if item['icon'] == '✅' else "interaction-neg"
+                st.markdown(
+                    f'{item["icon"]} <span class="{cls}">[{item["type"]}]</span> '
+                    f'**{item["name"]}** ({item["positions"]})',
+                    unsafe_allow_html=True)
+                st.caption(f"  → {item['description']}")
+
+    with sub_tabs[3]:
+        st.markdown("### 🏋️ 신강·신약 판단")
+        strength = report.strength
+        s_interp = generate_strength_interpretation(strength)
+
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.metric("힘 점수", f"{strength.score:.0f} / 100")
+            st.metric("판정", strength.grade)
+        with col2:
+            st.write(s_interp['interpretation'])
+
+        with st.expander("💡 판단 근거"):
+            for ev in s_interp['evidence']:
+                st.write(f"• {ev}")
+
+        st.markdown("#### 💬 조언")
+        for a in s_interp['advice']:
+            st.success(f"💡 {a}")
+
+
+# ========== 탭 3: 대운 타임라인 ==========
+def render_timeline_tab(report):
+    st.markdown("### 📅 대운(大運) 타임라인")
+
+    luck = report.luck_cycles
+    luck_interp = generate_luck_interpretation(luck, report.pillars.day_stem)
+
+    if not luck_interp['available']:
+        st.warning(luck_interp['message'])
+        st.info("사이드바에서 **성별**을 선택하면 대운을 산출할 수 있습니다.")
+        return
+
+    st.write(f"**방향**: {luck_interp['direction']} | **대운 시작**: {luck_interp['start_age']}세")
+
+    if luck_interp['current_text']:
+        st.info(f"📍 {luck_interp['current_text']}")
+
+    st.divider()
+
+    timeline = luck_interp['timeline']
+    num_cols = min(len(timeline), 5)
+    rows = [timeline[i:i+num_cols] for i in range(0, len(timeline), num_cols)]
+
+    for row in rows:
+        cols = st.columns(len(row))
+        for j, item in enumerate(row):
+            with cols[j]:
+                bg = '#FFD700' if item['is_current'] else '#FFF8DC'
+                border = '3px solid #8B4513' if item['is_current'] else '1px solid #D2B48C'
+                current_badge = '<span style="color:red;font-size:0.7em;">◀ 현재</span>' if item['is_current'] else ''
+
+                st.markdown(
+                    f'<div style="background:{bg};border:{border};border-radius:10px;'
+                    f'padding:12px;text-align:center;min-height:180px;">'
+                    f'<div style="font-size:1.8em;font-weight:bold;">{item["pillar"]}</div>'
+                    f'<div style="font-size:0.85em;color:#555;">{item["element"]} · {item["ten_god"]}</div>'
+                    f'<div style="font-size:0.85em;margin-top:5px;">{item["start_age"]}~{item["end_age"]}세</div>'
+                    f'<div style="font-size:0.75em;color:#888;">{item["start_year"]}~{item["end_year"]}년</div>'
+                    f'{current_badge}'
+                    f'<div style="font-size:0.7em;color:#666;margin-top:8px;">{item["relation"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+
+    with st.expander("📊 대운 상세 테이블"):
+        df = pd.DataFrame([{
+            '대운': item['pillar'], '오행': item['element'], '십신': item['ten_god'],
+            '시작나이': item['start_age'], '종료나이': item['end_age'],
+            '시작년도': item['start_year'], '종료년도': item['end_year'],
+            '해석': item['relation'],
+        } for item in timeline])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+# ========== 탭 4: 사주 정보 ==========
+def render_info_tab():
+    sub_tabs = st.tabs(["ℹ️ 사주란?", "📚 천간·지지", "🌊 오행", "🔟 십신", "🔄 12운성"])
+
+    with sub_tabs[0]:
+        st.markdown("""
+        ### 📖 사주(四柱)란?
+
+        **사주(四柱)**는 동양 전통 운명학으로, 태어난 **년·월·일·시**의 네 기둥(柱)을
+        천간(天干)과 지지(地支)로 표현하여 인간의 성향과 운의 흐름을 분석하는 학문입니다.
+
+        | 기둥 | 의미 | 대표 영역 |
+        |------|------|----------|
+        | **年柱** | 태어난 해 | 조상, 사회적 환경 |
+        | **月柱** | 태어난 달 | 부모, 성장 환경 |
+        | **日柱** | 태어난 날 | 자기 자신, 배우자 |
+        | **時柱** | 태어난 시간 | 자녀, 말년 |
+
+        #### 🔑 핵심 개념
+        - **일간(日干)**: 일주의 천간으로, 사주 분석의 **중심**입니다.
+        - **오행(五行)**: 木·火·土·金·水 — 우주 만물의 기본 에너지
+        - **십신(十神)**: 일간과 다른 글자의 관계 — 성격·운명의 핵심
+
+        #### ⚠️ 올바른 이해
+        사주는 **참고 자료**이지 절대적 운명이 아닙니다.
+        **본인의 노력과 선택**이 가장 중요합니다.
+        """)
+
+    with sub_tabs[1]:
+        st.markdown("### 천간(天干) 10자")
+        stem_data = []
+        for s in ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']:
+            si = STEM_INFO[s]
+            stem_data.append({'천간': s, '음독': si['korean'], '음양': si['yinyang'],
+                            '오행': si['element'], '의미': si['desc']})
+        st.dataframe(pd.DataFrame(stem_data), use_container_width=True, hide_index=True)
+
+        st.markdown("### 지지(地支) 12자")
+        branch_data = []
+        for b in ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥']:
+            bi = BRANCH_INFO[b]
+            branch_data.append({'지지': b, '음독': bi['korean'], '띠': bi['animal'],
+                              '오행': bi['element'], '음양': bi['yinyang'], '시간': bi['time']})
+        st.dataframe(pd.DataFrame(branch_data), use_container_width=True, hide_index=True)
+
+    with sub_tabs[2]:
+        st.markdown("### 🌊 오행(五行)")
+        for el in ['木', '火', '土', '金', '水']:
+            d = ELEMENT_DETAILS[el]
+            color = ELEMENT_COLORS[el]
+            st.markdown(
+                f'<div style="border-left:5px solid {color};padding:10px;margin:8px 0;'
+                f'background:#FAFAFA;border-radius:4px;">'
+                f'<strong style="font-size:1.2em;">{ELEMENT_KOREAN[el]}</strong><br>'
+                f'🎨 {d["color"]} | 🧭 {d["direction"]} | 🌸 {d["season"]} | '
+                f'😋 {d["taste"]} | 🏥 {d["organ"]}<br>'
+                f'💫 특성: {d["nature"]}</div>',
+                unsafe_allow_html=True)
+
+    with sub_tabs[3]:
+        st.markdown("### 🔟 십신(十神)")
+        for god, desc in TEN_GOD_DESC.items():
+            st.write(f"**{god}** — {desc}")
+
+    with sub_tabs[4]:
+        st.markdown("### 🔄 12운성(十二運星)")
+        for stage, desc in TWELVE_STAGE_DESC.items():
+            st.write(f"**{stage}** — {desc}")
+
+
+# ========== 유틸리티 ==========
+def _get_group_short_desc(group):
+    return {'비겁': '독립·경쟁', '식상': '창의·표현', '재성': '재물·실행',
+            '관성': '사회성·책임', '인성': '학습·사고'}.get(group, '')
+
+
+# ========== 메인 앱 ==========
+def main():
+    st.markdown('<p class="main-title">🔮 사주명리 분석</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">전통 명리학 기반 종합 사주 분석 서비스 v2.0</p>', unsafe_allow_html=True)
+
+    render_sidebar()
+
+    if st.session_state.analyzed and st.session_state.report:
+        report = st.session_state.report
+
+        tabs = st.tabs(["📊 분석 요약", "📋 상세 분석", "📅 대운 타임라인", "ℹ️ 사주 정보"])
+
+        with tabs[0]:
+            render_summary_tab(report)
+        with tabs[1]:
+            render_detail_tab(report)
+        with tabs[2]:
+            render_timeline_tab(report)
+        with tabs[3]:
+            render_info_tab()
+
+        # 시간 모름 시나리오
+        if report.input.hour is None:
+            with st.expander("⏰ 출생 시간별 시나리오 비교"):
+                scenarios = generate_time_scenarios(report.input, report.pillars)
+                cols = st.columns(3)
+                for i, sc in enumerate(scenarios):
+                    with cols[i]:
+                        st.markdown(f"**{sc['label']}**")
+                        if sc['pillar']:
+                            st.write(f"시주: {sc['pillar'].full}")
+                            st.write(f"십신: {sc['ten_god']}")
+                            st.write(f"12운성: {sc['twelve_stage']}")
+
+        st.markdown(f'<div class="disclaimer-box">{DISCLAIMER}</div>', unsafe_allow_html=True)
+
+    else:
+        st.markdown("---")
+        st.markdown("""
+        #### 🎯 사용 방법
+        1. **왼쪽 사이드바**에서 생년월일시를 입력하세요
+        2. **🔍 사주 분석하기** 버튼을 클릭하세요
+        3. 결과가 여러 탭으로 표시됩니다
+
+        #### 📌 분석 항목
+        - 📊 **사주 원국표** — 4주 8자, 지장간, 십신, 12운성
+        - 🌊 **오행 분석** — 木火土金水 분포 및 균형
+        - ☯️ **음양 분석** — 양과 음의 비율
+        - 🔟 **십신 분석** — 일간 기준 관계 분석
+        - 🏋️ **신강·신약** — 일간의 힘 판정
+        - ⚡ **합·충 관계** — 천간·지지 상호작용
+        - 📅 **대운 타임라인** — 10년 주기 운의 흐름
+        - ✨ **성격 분석** — 종합 성격 프로필
+        """)
+
+        st.divider()
+        render_info_tab()
+
+    st.divider()
+    st.caption("🔮 사주명리 분석 v2.0 | Python + Streamlit | 전통 명리학 이론 기반 참고 자료")
+
+
+if __name__ == "__main__":
+    main()
+else:
+    main()
