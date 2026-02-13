@@ -167,7 +167,7 @@ def calculate_luck_aspects(stem_branch_info):
     {year_branch}띠({BRANCH_MEANING[year_branch]})로 태어난 분의 특성:
     
     🌟 **기본 성질**: {year_stem} 천간의 에너지를 가진 사람
-    📊 **오행**: {FIVE_ELEMENTS.get(year_stem, '不明')}}}
+    📊 **오행**: {FIVE_ELEMENTS.get(year_stem, '不明')}
     💫 **운세**: 자신의 오행 에너지를 이해하면 더 나은 운을 만들 수 있습니다.
     
     ✨ **조언**: 자신의 타고난 성질을 받아들이고, 부족한 부분을 채우려는 노력이 중요합니다.
@@ -295,7 +295,7 @@ with tab1:
                 
                 # 운세 해석
                 st.subheader("✨ 운세 해석")
-                st.info(get_luck_aspects(stem_branch))
+                st.info(calculate_luck_aspects(stem_branch))
                 
                 # 상세 정보 표시
                 st.subheader("📋 전체 사주도")
