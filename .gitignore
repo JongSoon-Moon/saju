@@ -3,11 +3,16 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+dist/
+build/
+.streamlit/secrets.toml
 
 # Virtual Environment
 venv/
 env/
 ENV/
+.venv/
 
 # IDE
 .vscode/
@@ -15,17 +20,54 @@ ENV/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
+*.sublime-project
+*.sublime-workspace
 
 # Secrets and credentials
 .env
 .env.local
+.env.*.local
 secrets.toml
+config.toml
 
 # API Keys and tokens
 *.pem
 *.key
 *.token
+*.crt
+
+# Python
+*.log
+*.pot
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+coverage.xml
+.python-version
+
+# IDE and editor
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Project specific
+*.cache
+.cache/
+.tmp/
+temp/
+
